@@ -7,7 +7,7 @@ Agent skills for making videos with the Lenmu MCP server.
 
 | Skill | 用途 |
 |---|---|
-| [`lenmu-digitalhuman`](lenmu-digitalhuman/SKILL.md) | AI 數字人口播影片：一張主持人圖＋一段主題 → 寫稿、配音、對嘴、B-roll、字幕、包裝到成片。每一步花錢前先報價。 (AI presenter / talking-head videos.) |
+| [`lenmu-digitalhuman`](lenmu-digitalhuman/README.md) | AI 數字人口播影片：一張主持人圖＋一段主題 → 寫稿、配音、對嘴、B-roll、字幕、包裝到成片。每一步花錢前先報價。 (AI presenter / talking-head videos.) |
 | [`lenmu-manju`](lenmu-manju/README.md) | 短劇／漫劇導演套裝（12 個技能）：劇本 → 資產 → 分鏡 → 七段式投餵稿 → 質檢，可選用 Lenmu 直接出圖、出片、組成片。[manju-laoli-skill](https://github.com/lixiaoxiao9888-create/manju-laoli-skill) 的 fork。 (Short-drama director suite with a Lenmu execution layer.) |
 
 ## 需求
@@ -86,6 +86,9 @@ ChatGPT 的一般聊天介面目前沒有「上傳 skill 資料夾／zip」的�
 
 對助理說「用 Lenmu 做一支數字人口播影片」或「幫我寫一部短劇」，它應該會載入對應的 skill，
 並在開工時先呼叫 `list_models` 確認 Lenmu 連得上。
+
+裝好之後怎麼開始、它會問你什麼，見各 skill 自己的 README：
+[lenmu-digitalhuman](lenmu-digitalhuman/README.md#開始使用)、[lenmu-manju](lenmu-manju/README.md#開始使用)。
 
 > 以上步驟依 Claude 與 OpenAI 的官方文件整理（2026-11）。Claude Code 的安裝方式實際用過；
 > claude.ai 上傳與 Codex 的步驟沒有逐一實機驗證，介面若有更動請以官方文件為準。
