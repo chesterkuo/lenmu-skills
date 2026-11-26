@@ -42,14 +42,22 @@ lenmu-manju/
 
 ## 安裝
 
-12 個技能目錄要**同級**放進助理的 skills 目錄，入口是 `short-drama-director`。例如 Claude Code：
+12 個技能目錄要**同級**放進助理的 skills 目錄，入口是 `short-drama-director`；兩支門禁腳本放在同一層。
 
 ```bash
 git clone https://github.com/chesterkuo/lenmu-skills.git
-cp -r lenmu-skills/lenmu-manju/short-drama-director lenmu-skills/lenmu-manju/sd-*-engine ~/.claude/skills/
+cd lenmu-skills
+
+# Claude Code：~/.claude/skills　｜　OpenAI Codex：~/.agents/skills
+DEST=~/.claude/skills
+mkdir -p "$DEST"
+cp -r lenmu-manju/short-drama-director lenmu-manju/sd-*-engine "$DEST"/
+cp lenmu-manju/run_stage.py lenmu-manju/run_all_checks.py "$DEST"/
 ```
 
-機檢腳本互相用相對路徑呼叫，要跑 `run_all_checks.py`／`run_stage.py` 時請在 `lenmu-manju/` 這個目錄裡跑。
+- 接上 Lenmu MCP 的指令、claude.ai 與 Codex 的細節見[倉庫根的 README](../README.md#安裝)。
+- **不建議**裝在 claude.ai 網頁版／桌面版：那裡每個 skill 是各自獨立的上傳，套裝內互相引用的同級路徑不保證對得上。
+- 機檢腳本互相用相對路徑呼叫：`run_all_checks.py`／`run_stage.py` 要在 12 個技能目錄的上一層執行（也就是上面的 `$DEST`，或本 repo 的 `lenmu-manju/`）。
 
 ## 需求
 

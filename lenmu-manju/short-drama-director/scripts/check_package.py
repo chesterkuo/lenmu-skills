@@ -2677,9 +2677,11 @@ _m_refs = re.search(r"規則庫-(\d+)%20份", _readme_txt)
 _m_files = re.search(r"文件-(\d+)-", _readme_txt)
 _m_qc = re.search(r"機檢-C1~C(\d+)", _readme_txt)
 check("◑26 README 徽章與實際包體一致（規則庫份數精確 · 文件數不虛報）",
+      # Lenmu fork：安裝到 skills 目錄後包根沒有套裝 README，此時略過徽章比對
+      not os.path.isfile(os.path.join(PKG, "README.md")) or (
       bool(_m_refs) and int(_m_refs.group(1)) == EXPECTED_REFS
       and bool(_m_files) and int(_m_files.group(1)) <= _actual_files  # Lenmu fork：按上方註釋本意改為「只卡不虛報」（原為 ==）
-      and bool(_m_qc) and int(_m_qc.group(1)) == 41,
+      and bool(_m_qc) and int(_m_qc.group(1)) == 41),
       "README 徽章：規則庫=%s（應 %d）、文件=%s（實際 %d）、機檢上限 C%s（應 C41）" % (
           _m_refs.group(1) if _m_refs else "缺失", EXPECTED_REFS,
           _m_files.group(1) if _m_files else "缺失", _actual_files,
