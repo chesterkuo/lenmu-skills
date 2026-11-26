@@ -21,7 +21,7 @@ description: 用 Lenmu MCP 做 AI 數字人口播影片（digital human、talkin
 **先做一整條旁白，再讓臉去對它。**
 
 1. 整份稿子用 Seed TTS 3.0 **一次**做成一條旁白 → 聲音、語氣、音量天生一致，不需要事後「統一音色」。
-2. 在句間停頓把旁白切成幾段（每段 10–25 秒），每段丟給 **OmniHuman 2.0**（一張圖＋一段音訊 → 對嘴影片）。
+2. 用 Lenmu 字幕的句子時間把旁白切成幾段（每段 10–25 秒），每段丟給 **OmniHuman 2.0**（一張圖＋一段音訊 → 對嘴影片）。
 3. 用 `assemble_film` 組裝時，**把各段影片的原聲關掉，改鋪那一整條旁白**。影片只負責畫面，所以中間可以插 B-roll、切近景（punch-in），嘴型都不會跑掉；字幕用 `from_narration` 直接從旁白產生（Seed TTS 3.0 旁白免費）。
 
 這條路需要沙盒能從 Lenmu 下載檔案（`curl`）。下載不了時走第 12 節的備用路線。
@@ -70,7 +70,7 @@ digitalhuman_<名稱>/
   brief.md          平台、畫幅、片長、預算、風格、主持人、聲音
   script.json       稿子（第 4 節格式）
   persona.md        主持人：person_id、state_id、voice_id、外型描述、形象 prompt
-  audio/            narration.mp3、seg01.wav…、segments.json
+  audio/            narration.mp3、cues.json（字幕句子時間）、seg01.wav…、segments.json
   video/            seg01.mp4…、punch/（近景版）
   broll/  cards/    B-roll 圖與片、程式排版的資訊圖卡
   qa/               抽格拼圖、檢查紀錄
@@ -154,6 +154,7 @@ digitalhuman_<名稱>/
 - 9:16：臉放在畫面上方三分之一，胸口以下留給字幕。
 - 16:9（L1、L3）：人物放在畫面左或右三分之一，另一側留乾淨背景。
 - 避免：墨鏡、帽沿、髮絲遮眼、張嘴笑露齒、手拿東西、複雜花紋（會閃）。
+- **避免「AI 臉」**：上面的範本容易出來過度精緻、千篇一律的臉。使用者嫌假時，把開頭換成「紀實人像攝影，自然窗光，未經修圖的真實質感：皮膚有可見的毛孔、細紋和些微膚色不均，五官略不對稱，沒有濾鏡和磨皮」，並把四張候選寫成**四個不同的人**（年齡、臉型、髮型、服裝、場景各不相同，每張各送一次、`count: 1`），讓使用者有得選。
 - 使用者選定後：
   1. `save_character`（免費；只收 Lenmu 直接生成的圖）。
   2. `update_character` 綁定選好的 `voice_id`，之後 `generate_audio` 可直接帶 `person_id`。
@@ -168,13 +169,25 @@ digitalhuman_<名稱>/
 ## 7. 切段與對嘴（關卡 ④ ⑤）
 
 ### 7.1 切旁白
-```bash
-curl -sSL -o audio/narration.mp3 "<旁白 url>"
-python3 -I <skill>/scripts/split_narration.py audio/narration.mp3 script.json audio/
-```
-- 依各段字數比例（漢字、假名、韓文算字，英數算詞）估出切點，對齊到最近的句間停頓正中間；輸出 `seg01.wav…` 和 `segments.json`（各段 start_ms／end_ms／duration_ms，加總等於全長）。
-- 找不到停頓：在念稿那裡加句號重做旁白。某段短於 4 秒：併到相鄰段。
-- 上傳：`create_upload_url`（`count` = 段數，`filenames` 照順序；一次最多 10 個，超過就分批呼叫），每段 `curl -sS -T audio/segNN.wav <upload_url>`，記下每段 media_id。
+
+**先拿到每一句的準確時間，再切。** 只靠偵測停頓不可靠：TTS 在段落之間不一定停頓，實測會把切點切晚一整句。
+
+1. **取得字幕句子時間（免費）**：做一段 2 秒的空白片，上傳、放上畫布，和整條旁白組一支探測用的片，再讀回它的字幕時間。
+   ```bash
+   ffmpeg -y -v error -f lavfi -i "color=c=black:s=360x640:r=24:d=2" -c:v libx264 -pix_fmt yuv420p blank.mp4
+   ```
+   - `create_upload_url` → `curl -sS -T blank.mp4 <upload_url>` → `add_media_to_canvas` 拿到 node_id。
+   - `assemble_film`：`segments: [{node_id}]`、`keep_original_audio: false`、`narration: {media_id: <整條旁白>}`、`subtitles: {from_narration: true, preset: "none"}`。**不要帶 `script`**，這樣回來的字幕文字就是念稿。Seed TTS 3.0 旁白報價是 $0。
+   - 完成後 `get_node` 讀這個 film 節點，把整包回應存成 `audio/cues.json`（腳本會自己找出 `subtitles.cues`）。旁白雖然比空白片長，字幕仍會涵蓋整條旁白。
+2. **切段**：
+   ```bash
+   curl -sSL -o audio/narration.mp3 "<旁白 url>"
+   python3 -I <skill>/scripts/split_narration.py audio/narration.mp3 script.json audio/ audio/cues.json
+   ```
+   - 切點放在「上一段最後一句結束」和「下一段第一句開始」的正中間；那裡有實際停頓就切在停頓正中間。輸出 `seg01.wav…` 和 `segments.json`（各段 start_ms／end_ms／duration_ms，加總等於全長），最後一行會寫「切點來源：字幕時間」。
+   - 腳本說字幕文字和稿子對不起來：確認 `cues.json` 是這條旁白的、探測時沒有帶 `script`。
+   - 不帶 `cues.json` 也能跑，但只是用停頓估計，會印出警告。只有拿不到字幕時間時才這樣做，而且每段的頭尾都要請使用者聽過。
+3. **只上傳要對嘴的段落**：`create_upload_url`（`count` = 要上傳的段數，`filenames` 照順序；一次最多 10 個，超過就分批呼叫），每段 `curl -sS -T audio/segNN.wav <upload_url>`，記下每段 media_id。要做 OmniHuman 的段落至少 4 秒，太短就和相鄰段合併成一段對嘴。只配 B-roll 或圖卡的段落不用上傳，它們只需要 `segments.json` 裡的時間。
 
 ### 7.2 第一段（關卡 ④）
 `generate_video`：
@@ -198,8 +211,8 @@ ffprobe -v error -show_entries format=duration:stream=width,height,r_frame_rate 
 ffmpeg -v error -i video/seg01.mp4 -vf "fps=1,scale=240:-2,tile=6x4" -frames:v 1 qa/seg01_sheet.png
 ```
 - 放大看拼圖：臉有沒有變形或變成別人、牙齒和嘴角是否怪異、眼神飄走、手指數目、衣服和髮型有沒有漂移、背景扭曲、結尾突然重置。
-- **長度對齊**：影片長度和 `segments.json` 的 duration_ms 比。影片較長 → 組裝時 `out_ms` = 音訊長度；較短超過 1 幀 → 該段用 `speed` = 影片長 ÷ 音訊長 拉齊。差距記進 `qa/`。
-- 實際尺寸以 ffprobe 為準，不以 `get_canvas` 回報為準。
+- **長度對齊**：影片長度和 `segments.json` 的 duration_ms 比。**OmniHuman 的影片長度會進位到整秒**（實測 8.58 秒的音訊出 9.02 秒、4.44 秒出 5.02 秒），所以幾乎每段都比音訊長 → 組裝時每段都帶 `out_ms` = 音訊長度；較短超過 1 幀 → 該段用 `speed` = 影片長 ÷ 音訊長 拉齊。差距記進 `qa/`。
+- 實際尺寸以 ffprobe 為準，不以 `get_canvas` 回報為準。OmniHuman 實測輸出 720x1280（9:16 的圖）、24 fps，成片輸出 1080 時會放大。
 - 有問題：輕微的（頭尾一兩格）用 `out_ms`、`in_ms` 剪掉；嚴重的只重做那一段，先檢討圖或提示詞再送，不要原封重送。
 
 ---
@@ -227,7 +240,7 @@ ffmpeg -v error -i video/seg01.mp4 -vf "fps=1,scale=240:-2,tile=6x4" -frames:v 1
 Z=1.15   # 放大倍率，720p 素材不要超過 1.2
 ffmpeg -i video/seg02.mp4 -vf "crop=trunc(iw/$Z/2)*2:trunc(ih/$Z/2)*2:(iw-ow)/2:(ih-oh)*0.30,scale=<原寬>:<原高>:flags=lanczos,setsar=1" -c:v libx264 -crf 16 -preset veryfast -an video/punch/seg02_p.mp4
 ```
-`0.30` 讓裁切偏上、保住臉。上傳 → `add_media_to_canvas`。
+`0.30` 讓裁切偏上、保住臉。近景版要從**還沒疊 AI 標示**的原片裁，裁完再疊標示，否則標示會被放大或裁掉。上傳 → `add_media_to_canvas`。
 
 ---
 
@@ -235,15 +248,22 @@ ffmpeg -i video/seg02.mp4 -vf "crop=trunc(iw/$Z/2)*2:trunc(ih/$Z/2)*2:(iw-ow)/2:
 
 | 包裝 | 做法 |
 |---|---|
-| 開場鉤子 | 第一句用 B-roll 或圖卡＋`texts`（`style: title`、`position: center`、`animation: zoomIn` 或 `springUp`），第二句才切回主持人。主持人在畫面上時大字放 `top`，不壓臉（那段時間 AI 標示要讓開，見最後一列） |
-| 重點字卡 | `texts` `style: caption`、`position: top`、`animation: slideLeft`，1.5–2.5 秒 |
+| 開場鉤子 | 第一句用 B-roll 或圖卡＋`texts`（`style: title`、`position: center`、`animation: zoomIn` 或 `springUp`），第二句才切回主持人。主持人在畫面上時不要疊大字（`top` 會壓到頭、`center` 會壓到臉） |
+| 重點字卡 | `texts` `style: caption`、`position: top`、`animation: slideLeft`，1.5–2.5 秒。放在圖卡或 B-roll 上，不要放在主持人畫面上（見下方「文字位置」） |
 | 數字強調 | 程式排的數字卡當插入片段，或 `texts` 加 `animation: pulse` |
 | 人名條 | `texts` `style: caption`、`position: bottom`，開場 3–5 秒（字幕要錯開時間） |
-| 章節 | `texts` `style: title`、`position: top`，或程式排的章節卡片段 |
-| 字幕 | `subtitles: {from_narration: true, script: <所有 show 串起來>, preset}`；S1 用 `strong`，S2 用 `soft`，L 系列用 `outline` |
+| 章節 | 程式排的章節卡片段（建議），或 `texts` `style: title`、`position: top` 疊在 B-roll 上 |
+| 字幕 | 先用 `subtitles: {from_narration: true, script: <所有 show 串起來>, preset}` 組一次；S1 用 `strong`，S2 用 `soft`，L 系列用 `outline`。**直式畫面一行大約只放得下 10 個中文字**，超過會折行、最後一兩個字掉到第二行：組完用 `get_node` 讀回 `subtitles.cues`，把太長的句子在語意斷點拆成兩句（時間按字數比例分），改用 `subtitles: {cues: [...], preset}` 重組（帶 `film_node_id` 更新同一個節點） |
 | 音效 | `generate_audio` model `byteplus/seed-audio-1.0`，`duration_seconds: 1–2`，例如「短促的 whoosh 轉場聲」「清脆的 pop 提示音」；放在切 B-roll 和字卡出現的時間點，`volume_db` −6 左右 |
-| 配樂 | Lyria（`vertex/lyria-3-clip-preview` 或 `-pro-`），instrumental，「輕快、無人聲、適合口播背景」；`music_volume` 0.08–0.12。先看生成長度，不夠長就換 Pro |
-| AI 標示 | `texts`：「本影片由 AI 數字人呈現」，`style: caption`、`position: top`、`animation: none`，從 0 到片尾（第 13 節）。**`top` 同一時間只放一張字**：有其他 `top` 字卡（鉤子、重點、章節）的時段，把標示拆成幾張、跳過那些時段，字卡一結束就接回來；片頭前 3 秒和片尾最後 3 秒一定要有標示，所以這兩段的其他字卡改放 `center` |
+| 配樂 | Lyria（`vertex/lyria-3-clip-preview` 或 `-pro-`），instrumental，「輕快、無人聲、適合口播背景」；`music_volume` 0.08–0.12。實測 Pro 一段約 3 分鐘；Clip 的長度沒測過，先生一段看長度，不夠長才換 Pro（比較貴，換之前先報價） |
+| AI 標示 | 「本影片由 AI 數字人呈現」。**直接畫進每一段畫面的最上方**（第 13 節）：圖卡在排版時就加上；主持人片段下載後用 ffmpeg 疊一條透明 PNG 再上傳（`-filter_complex "[0:v][1:v]overlay=0:0"`、`-c:a copy`）。不要用 `texts` 的 `top`——它在畫面 27% 的高度，會壓到主持人的頭和圖卡標題。走備用路線（不能下載）時才用 `texts`，並把構圖往下留空 |
+
+**文字位置（實測，對照 Lenmu 原始碼）**：`texts` 的 `top`／`center`／`bottom` 是文字中心在畫面高度的 27%／50%／73%，不是貼邊；字幕大約在 80%。所以：
+
+- 9:16 主持人的臉在上方三分之一時，`top` 會落在頭髮和額頭上。主持人畫面上需要的字（標示、人名）一律畫進畫面。
+- 自己排的圖卡：最上方 0–9% 留給 AI 標示，內容放在 10%–74%，75% 以下留給字幕。
+- 同一張圖卡上不要再疊 `texts`，要什麼字直接排進圖卡。
+
 
 上限：最多 20 個片段（含同一段切開的）、600 秒、60 張字卡、16 個音效；音樂＋旁白＋音效合計最多 8 個不同音檔。**排時間軸前先算片段數**，超過 20 就減少切換或分章節。
 
@@ -275,7 +295,6 @@ B-roll   ：in 0 → out d
   "narration": {"media_id": "<整條旁白>"},
   "subtitles": {"from_narration": true, "script": "<字幕稿全文>", "preset": "strong"},
   "music_media_id": "<配樂>", "music_volume": 0.1,
-  "texts": [{"text": "本影片由 AI 數字人呈現", "at_ms": 0, "duration_ms": 60000, "style": "caption", "position": "top", "animation": "none"}],
   "output": {"aspect": "9:16", "resolution": 1080}
 }
 ```
@@ -284,7 +303,7 @@ B-roll   ：in 0 → out d
 - 每段的時間軸長度＝(out − in) ÷ speed，全部加起來要等於旁白全長；送出前用程式加總核對。
 - node_id 從 `get_canvas` 取；`out_ms` 不能超過該段 `duration_ms`；每一刀（含近景和 B-roll）至少 0.5 秒。
 - 每段主持人的最後一刀都帶 `out_ms` = 該段音訊長度（範例的 `<P1>`）；只有確認影片和音訊等長（7.4）才能省略（範例的 `<P3>`）。
-- AI 標示的 `duration_ms` 填旁白全長（範例的 60000 只是示意）；有其他 `top` 字卡時照第 9 節拆開。
+- AI 標示已經畫在各段畫面裡（第 9 節），所以範例沒有 `texts`。
 
 ---
 
@@ -322,6 +341,7 @@ ffmpeg -i final/film.mp4 -af "volume=5.3dB,alimiter=limit=0.89:level=false" -c:v
 2. 每段 OmniHuman，`reference_media_ids` 帶該段音訊。
 3. `assemble_film`：`keep_original_audio: true`、不帶 narration；B-roll 只能放在**段與段之間**當 1–2 秒的過場（插在段內會把聲音切掉）。
 4. 字幕改用 `texts`（`style: subtitle`、`position: bottom`），時間依字數比例在每段內估算；請使用者在 Lenmu 片編輯器微調。
+5. AI 標示用一張全程的 `texts`（`style: caption`、`position: top`、`animation: none`）。它在畫面 27% 高度，所以這條路線的主持人圖要把臉放低一點、頭頂多留空。
 
 ---
 
@@ -330,7 +350,7 @@ ffmpeg -i final/film.mp4 -af "volume=5.3dB,alimiter=limit=0.89:level=false" -c:v
 - **主持人預設是 Lenmu 生成的虛構人物。**
 - 使用者**本人**要當主持人：本人同意、本人的正面照（正面、平光、閉嘴、頭髮不遮臉），以 `reference_media_ids` 給 OmniHuman；上傳照片不能存進角色庫。平台拒絕就停，**不用馬賽克或任何手法繞過審核**。
 - 不使用名人、政治人物、親友或網路上的照片和聲音；不模仿特定真人的聲音。聲音只用內建聲音，或使用者本人的複製聲音。
-- **每支成片都要有「AI 數字人」標示**（第 9 節的 AI 標示字卡，只在其他 `top` 字卡出現時短暫讓開），並提醒使用者發布文案也註明。
+- **每支成片都要有「AI 數字人」標示**（第 9 節：畫進每一段畫面的最上方，全程不中斷），並提醒使用者發布文案也註明。
 - 示意數據要標「示意」。B-roll 不用影視截圖、網路梗圖、品牌 Logo、知名角色。
 - 角色同意聲明（例如 `register_character_avatar`、`publish_play`）要原文給使用者看，由使用者決定。
 
@@ -342,11 +362,14 @@ skill 資料夾裡沒有這個檔案時，照下面寫出來：
 
 ```python
 #!/usr/bin/env python3
-"""把一整條 TTS 旁白依 script.json 的段落切成 WAV（切在句間停頓正中間）。
-用法：python3 split_narration.py narration.mp3 script.json out_dir/"""
+"""把一整條 TTS 旁白依 script.json 的段落切成 WAV。
+用法：python3 split_narration.py narration.mp3 script.json out_dir/ [cues.json]
+cues.json = Lenmu 字幕的句子時間（get_node 讀 film 節點的 subtitles.cues）。有它才切得準；
+沒有時只能靠句間停頓估計，切點要請用戶聽過。"""
 import json, re, subprocess, sys
 from pathlib import Path
 SR = 48000
+WORD = r"[぀-ヿ一-鿿가-힯]|[A-Za-z0-9]+"
 
 def run(cmd):
     return subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -364,53 +387,107 @@ def silences(path, noise_db=-35, min_d=0.20):
     return [((a + b) / 2, b - a) for a, b in zip(s, e)]
 
 def spoken_len(text):
-    # 漢字、日文假名、韓文各算一個音節，英數算一個詞
-    return len(re.findall(r"[぀-ヿ一-鿿가-힯]|[A-Za-z0-9]+", text))
+    # 漢字、日文假名、韓文各算一個音節，英數算一個詞；句號類停頓算 2、逗號類算 1
+    units = len(re.findall(WORD, text))
+    return units + 2 * len(re.findall(r"[。．.！!？?…]", text)) + len(re.findall(r"[，,、；;：:]", text))
 
-def split(wav, segs, out):
-    total = duration_s(wav)
+def norm(text):
+    return "".join(re.findall(WORD, text)).lower()
+
+def find_cues(obj):
+    """從 cues.json 找出句子清單：可以直接是清單，也可以是 get_node 的整包輸出"""
+    if isinstance(obj, list) and obj and isinstance(obj[0], dict) and "text" in obj[0]:
+        return obj
+    for v in (obj.values() if isinstance(obj, dict) else obj if isinstance(obj, list) else []):
+        r = find_cues(v)
+        if r:
+            return r
+    return None
+
+def cuts_from_cues(segs, cues, sil):
+    """用字幕句子的時間定切點：切在上一句結束和下一句開始的正中間"""
+    cs = [(norm(c["text"]), c.get("startMs", c.get("start_ms")) / 1000, c.get("endMs", c.get("end_ms")) / 1000)
+          for c in cues]
+    cat = "".join(t for t, _, _ in cs)
+    key = next((k for k in ("say", "show") if "".join(norm(s.get(k, "")) for s in segs) == cat), None)
+    if key is None:
+        sys.exit("字幕文字和 script.json 的念稿、字幕稿都對不起來：確認 cues 是這條旁白的，或不帶 cues 改用停頓估計")
+    cuts, pos, k, acc = [], 0, 0, 0
+    for s in segs[:-1]:
+        pos += len(norm(s[key]))
+        while k < len(cs) and acc + len(cs[k][0]) <= pos:
+            acc += len(cs[k][0]); k += 1
+        if acc != pos:  # 段落結尾落在一句字幕中間：按字數比例估
+            t, a, b = cs[k]
+            cuts.append(a + (b - a) * (pos - acc) / len(t))
+            print(f"注意：第 {len(cuts)} 個切點落在句子中間（「{cues[k]['text']}」），請聽過確認", file=sys.stderr)
+            continue
+        end, start = cs[k - 1][2], cs[k][1]
+        mid = (end + start) / 2
+        near = [m for m, d in sil if end - 0.15 <= m <= start + 0.15]  # 有實際停頓就切在停頓正中間
+        cuts.append(min(near, key=lambda m: abs(m - mid)) if near else mid)
+    return cuts
+
+def cuts_from_silence(segs, sil, total):
+    """沒有字幕時間時的估計：依字數比例找最長、最近的句間停頓"""
     weights = [max(1, spoken_len(s["say"])) for s in segs]
-    sil = silences(wav)
-    cuts, acc = [], 0
-    for w in weights[:-1]:
-        acc += w
-        target = total * acc / sum(weights)
-        cand = [m for m, d in sil if abs(m - target) <= 3.0 and (not cuts or m > cuts[-1] + 4.0)]
+    cuts, prev = [], 0.0
+    for k in range(len(weights) - 1):
+        # 每切一刀就以剩餘長度重新估下一個切點，誤差不會累積
+        target = prev + (total - prev) * weights[k] / sum(weights[k:])
+        cand = [(d - 0.1 * abs(m - target), m) for m, d in sil
+                if abs(m - target) <= 4.0 and m > prev + 4.0]
         if not cand:
-            sys.exit(f"找不到 {target:.2f}s 附近的停頓：在念稿該處加句號，重做旁白")
-        cuts.append(min(cand, key=lambda m: abs(m - target)))
+            sys.exit(f"找不到 {target:.2f}s 附近的停頓：在念稿該處加句號重做旁白，或改用字幕時間（cues.json）")
+        prev = max(cand)[1]
+        cuts.append(prev)
+    print("注意：沒有字幕時間，切點是用停頓估的，段落之間沒有停頓時會切錯。每段的頭尾要請用戶聽過。", file=sys.stderr)
+    return cuts
+
+def split(wav, segs, out, cues):
+    total = duration_s(wav)
+    sil = silences(wav)
+    cuts = cuts_from_cues(segs, cues, sil) if cues else cuts_from_silence(segs, sil, total)
     bounds = [0] + [round(c * SR) for c in cuts] + [round(total * SR)]
     info = []
     for i, (a, b) in enumerate(zip(bounds[:-1], bounds[1:]), 1):
-        if (b - a) / SR < 4.0:
-            sys.exit(f"第 {i} 段只有 {(b - a) / SR:.2f}s，OmniHuman 至少 4 秒：併到相鄰段")
+        if b <= a:
+            sys.exit(f"第 {i} 段長度不是正數：檢查 script.json 的段落順序")
         f = out / f"seg{i:02d}.wav"
         run(["ffmpeg", "-y", "-v", "error", "-i", str(wav), "-af",
              f"atrim=start_sample={a}:end_sample={b},asetpts=N/SR/TB", "-c:a", "pcm_s16le", str(f)])
         start_ms, end_ms = round(a * 1000 / SR), round(b * 1000 / SR)
         info.append({"seg": i, "file": f.name, "start_ms": start_ms,
                      "end_ms": end_ms, "duration_ms": end_ms - start_ms})
+        if end_ms - start_ms < 4000:
+            print(f"注意：第 {i} 段只有 {(end_ms - start_ms) / 1000:.2f}s，要做 OmniHuman 對嘴的段落至少 4 秒", file=sys.stderr)
     (out / "segments.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(info, ensure_ascii=False, indent=2))
-    print(f"全長 {round(total * 1000)} ms／各段加總 {sum(x['duration_ms'] for x in info)} ms")
+    print(f"全長 {round(total * 1000)} ms／各段加總 {sum(x['duration_ms'] for x in info)} ms"
+          f"／切點來源：{'字幕時間' if cues else '停頓估計'}")
 
-def main(src, script_path, out_dir):
-    for p in (src, script_path):
+def main(src, script_path, out_dir, cues_path=None):
+    for p in (src, script_path) + ((cues_path,) if cues_path else ()):
         if not Path(p).is_file():
             sys.exit(f"找不到檔案：{p}")
     segs = json.loads(Path(script_path).read_text(encoding="utf-8"))["segments"]
+    cues = None
+    if cues_path:
+        cues = find_cues(json.loads(Path(cues_path).read_text(encoding="utf-8")))
+        if not cues:
+            sys.exit(f"{cues_path} 裡找不到字幕句子（要有 text、startMs、endMs）")
     out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
     wav = out / "_full.wav"
     try:
         run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-ac", "1", "-ar", str(SR), str(wav)])
-        split(wav, segs, out)
+        split(wav, segs, out, cues)
     except subprocess.CalledProcessError as e:
         sys.exit(f"{e.cmd[0]} 失敗：{(e.stderr or '').strip()}")
     finally:
         wav.unlink(missing_ok=True)
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4:
+    if len(sys.argv) not in (4, 5):
         sys.exit(__doc__)
     main(*sys.argv[1:])
 ```
@@ -444,8 +521,10 @@ if __name__ == "__main__":
 | 某個詞念錯 | 改念稿（同音字、國字數字）重做旁白；字幕稿不動 |
 | 主持人的臉在段落間不一樣 | 每段都用同一個 state 圖；換裝要用 `add_character_state` 的新狀態，不要每段重生形象 |
 | 長段落手勢或衣服漂移 | 段落縮短到 10–15 秒；提示詞減少動作 |
-| 字幕壓到臉或和字卡打架 | 9:16 臉放上三分之一；字卡放 `top`，人名條避開字幕時間 |
-| AI 標示和字卡疊在一起 | `top` 同一時間只放一張字：把標示拆開、跳過字卡的時段（第 9 節） |
+| 字幕壓到臉或和字卡打架 | 字幕在畫面約 80% 高度：9:16 臉放上三分之一，圖卡內容不要低於 74% |
+| AI 標示壓到頭或圖卡標題 | `texts` 的 `top` 在 27% 高度：改成把標示畫進每段畫面最上方（第 9 節） |
+| 字幕最後一兩個字掉到第二行 | 直式一行約 10 個中文字：讀回 `subtitles.cues`，拆短後用 `cues` 重組（第 9 節） |
+| 段落畫面比旁白晚一句或早一句 | 切點沒用字幕時間：照 7.1 取得 `cues.json` 重切 |
 | `from_narration` 被拒（旁白太長） | 旁白超過 300 秒：按章節拆成幾條旁白、各自組片，或改給 `subtitles.cues` |
 | 片段超過 20 個 | 減少近景切換、把相鄰 B-roll 合併，或分章節組裝 |
 | 生成被內容審核擋 | 改提示詞或素材，不要原封重送；真人照片被拒就改用 AI 主持人 |
