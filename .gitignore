@@ -3,3 +3,9 @@ __pycache__/
 .DS_Store
 # 使用 skill 時產生的專案資料夾
 digitalhuman_*/
+*.py[cod]
+.venv/
+venv/
+_tmp/
+*.tmp
+*.log
