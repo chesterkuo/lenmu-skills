@@ -91,14 +91,15 @@ version: "8.2.0-SLIM-lenmu.1"
 
 ### 七·乙 接線：全局圖號 ↔ 本次調用的圖序
 
-上游的圖號是**全項目統一編號**，每段只掛本段出場的那幾張（《逐段參考圖掛載表》）。Lenmu 按 `reference_media_ids` 的**順序**認圖，所以段 2 掛「圖1、圖2、圖5」時，送進 Lenmu 的提示詞必須寫成「圖1、圖2、圖3」。這一步用腳本做，不手改：
+上游的圖號是**全項目統一編號**，每段只掛本段出場的那幾張（《逐段參考圖掛載表》）。Lenmu 送給 Seedance 的引用記號是 **`[Image N]` / `[Video N]` / `[Audio N]`**，N = 本次調用裡該類素材的第幾個（`reference_media_ids` 的順序；`characters[]` 排在其後）。提示詞裡寫「圖1」Lenmu **不認**——沒被 `[Image N]` 引用到的素材，Lenmu 只會在文末自動補一行 `References: [Image 1] [Image 2] …`，模型就不知道哪張圖對哪個角色。所以段 2 掛「圖1、圖2、圖5」時，送進 Lenmu 的提示詞必須寫成 `[Image 1]`、`[Image 2]`、`[Image 3]`。這一步用腳本做，不手改：
 
 ```bash
 python3 -I sd-lenmu-engine/scripts/lenmu_wiring.py \
   --prompt 段02.txt --wiring 圖冊.json --model 2.5 --aspect 16:9 --duration 28
 ```
 
-- 輸出 `args`（可直接用於 `generate_video`）、`mapping`（全局圖號 ↔ 本次圖序 ↔ media_id）、`errors` / `warnings`；
+- 輸出 `args`（可直接用於 `generate_video`）、`mapping`（全局圖號 ↔ `[Image k]` ↔ media_id）、`errors` / `warnings`；稿裡的「圖N」「（參考圖N）」「[圖N]」都會改寫成 `[Image k]`，視頻 / 音頻同理；
+- **首尾幀模式（僅 2.5）不走本腳本的圖號**：`first_frame_media_id` 固定是 `[Image 1]`，`last_frame_media_id` 緊接其後（有首幀時是 `[Image 2]`）；
 - 它同時核對：圖號都有 media_id、參考數量不超模型上限、段長與畫幅合法、提示詞 ≤4000 字（Lenmu 上限）；
 - **有 errors 不得生成**。超字數回 `sd-feed-engine` 壓字或拆段；超圖位按上游「群像 / 敵人可省圖」原則減圖；
 - 主文檔與看板保留**全局圖號**；改寫後的版本只用於送 Lenmu，回報用戶時把 `mapping` 一併給出；
@@ -185,13 +186,18 @@ ffmpeg -v error -i 段01.mp4 -vf "fps=1,scale=320:-2,tile=6x5" -frames:v 1 段01
 | 預算不夠 | 停下報告已花 / 尚需。調高預算由用戶決定（`set_budget` 調高會回 `requires_confirmation`） |
 | 用戶要 21:9 | 見 §五 B 鎖行，先定方案再動 |
 
-## 十三、尚未實測的假設（照實告知用戶）
+## 十三、已核對與尚未實測的部分（照實告知用戶）
 
-本引擎根據 Lenmu MCP 的工具定義與 `list_models` 寫成，下列幾點沒有用真實生成驗證過，**首段質檢時要專門核對**，不符就停下回報：
+**已對照 Lenmu MCP 原始碼核對（2026-11）：**
 
-1. **「圖N = `reference_media_ids` 的第 N 張」**——Lenmu 的 Seedance 是否按這個口徑解析提示詞裡的圖號；
-2. 七段式裡的 `@//chr/`、`@SCN-`、聲音標記（`<>` / `{}` / `()`）在 Lenmu 的 Seedance 上是否與上游實測的平台表現一致；
-3. 資產板（四格板、五宮格）作為參考圖在 Lenmu 上的鎖形象效果。
+- 引用記號是 `[Image N]` / `[Video N]` / `[Audio N]`，按輸入順序分類編號；首幀、尾幀排在圖片編號最前；未被引用的素材由 Lenmu 在文末補 `References:` 一行；
+- 本文件用到的工具、參數名、上限（參考數量、段長、提示詞 4000 字、成片 20 段 / 600 秒 / 8 個音檔、每個剪切 ≥0.5 秒）都存在且一致。
+
+**沒有用真實生成驗證過，首段質檢時要專門核對，不符就停下回報：**
+
+1. 七段式整段中文結構（`@//chr/`、`@SCN-`、聲音標記 `<>` / `{}` / `()`）搭配 `[Image N]` 記號，在 Lenmu 的 Seedance 上的實際效果；
+2. 資產板（四格板、五宮格）作為參考圖在 Lenmu 上的鎖形象效果；
+3. 改寫後的提示詞不再跑上游機檢（機檢看的是保留全局圖號的主文檔）——改寫只換記號、不動其他文字。
 
 ## 十四、快速調用語
 

@@ -4,8 +4,10 @@
 
 做三件事：
   1. 找出本段提示詞引用的 圖N / 視頻N / 音頻N，逐個查 media_id（查不到 = 該資產還沒在 Lenmu 生成，FAIL）；
-  2. 按圖號升序排出 reference_media_ids，並把提示詞裡的全局圖號改寫成「本次調用的第幾張」
-     （Lenmu 按掛載順序認圖：全局 圖1/圖2/圖5 掛三張 → 提示詞裡必須寫 圖1/圖2/圖3）；
+  2. 按圖號升序排出 reference_media_ids，並把提示詞裡的全局圖號改寫成 Lenmu 的引用記號
+     [Image k] / [Video k] / [Audio k]（k = 本次調用裡該類素材的第幾個）。
+     Lenmu 只認這種記號：全局 圖1/圖2/圖5 掛三張 → 送出的提示詞寫 [Image 1]/[Image 2]/[Image 3]；
+     提示詞沒引用到的素材，Lenmu 會自動在文末補一行「References: [Image k]」；
   3. 核對模型上限（參考數量 / 段長 / 畫幅 / 提示詞長度）。
 
 用法：
@@ -33,12 +35,15 @@ SIZES = {("16:9", 720): "1280x720", ("16:9", 1080): "1920x1080",
          ("9:16", 720): "720x1280", ("9:16", 1080): "1080x1920"}
 PROMPT_MAX = 4000
 KINDS = (("image", "圖"), ("video", "視頻"), ("audio", "音頻"))
-# 「構圖3」「地圖2」這類不是參考圖編號
+# 「構圖3」「地圖2」這類不是參考圖編號；繁簡兩種寫法、外層方括號與 @ 前綴都接受，
+# 稿裡已經寫成 [Image N] 的也當作全局編號處理
 REF_RE = {
-    "image": re.compile(r"(?<![構地藍截插貼意試企])圖\s?(\d+)"),
-    "video": re.compile(r"視頻\s?(\d+)"),
-    "audio": re.compile(r"音頻\s?(\d+)"),
+    "image": re.compile(r"\[?@?(?:(?<![構构地藍蓝截插貼贴意試试企])[圖图]|Image)\s?(\d+)\]?"),
+    "video": re.compile(r"\[?@?(?:[視视][頻频]|Video)\s?(\d+)\]?"),
+    "audio": re.compile(r"\[?@?(?:音[頻频]|Audio)\s?(\d+)\]?"),
 }
+TOKEN = {"image": "Image", "video": "Video", "audio": "Audio"}
+ALT = {"圖": "图", "視頻": "视频", "音頻": "音频"}
 UUID_RE = re.compile(r"^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
 
 
@@ -61,7 +66,8 @@ def wire(prompt, wiring, model="2.5", aspect="16:9", duration=None, res=720,
         renum = {}
         for pos, n in enumerate(nums, 1):
             key = f"{label}{n}"
-            mid = _media_id(wiring.get(key))
+            entry = wiring.get(key) or wiring.get(ALT[label] + str(n))  # 圖冊鍵繁簡皆可
+            mid = _media_id(entry)
             if not mid:
                 errors.append(f"{key} 在圖冊裡沒有 media_id（資產尚未在 Lenmu 生成或未登記）")
             elif not UUID_RE.match(mid):
@@ -69,12 +75,11 @@ def wire(prompt, wiring, model="2.5", aspect="16:9", duration=None, res=720,
             else:
                 ref_ids.append(mid)
             renum[n] = pos
-            entry = wiring.get(key)
-            mapping.append({"global": key, "call": f"{label}{pos}", "media_id": mid,
+            mapping.append({"global": key, "call": f"[{TOKEN[kind]} {pos}]", "media_id": mid,
                             "name": entry.get("name", "") if isinstance(entry, dict) else ""})
         if renum:
             new_prompt = REF_RE[kind].sub(
-                lambda m, r=renum, lb=label: f"{lb}{r[int(m.group(1))]}", new_prompt)
+                lambda m, r=renum, tk=TOKEN[kind]: f"[{tk} {r[int(m.group(1))]}]", new_prompt)
         if counts[kind] > lim[kind]:
             errors.append(f"{label}參考 {counts[kind]} 個，超過 Seedance {model} 在 Lenmu 的上限 {lim[kind]}")
     total = sum(counts.values())
@@ -82,8 +87,8 @@ def wire(prompt, wiring, model="2.5", aspect="16:9", duration=None, res=720,
         errors.append(f"參考素材合計 {total} 個，超過 Seedance {model} 在 Lenmu 的總上限 {lim['total']}")
     if total == 0:
         warnings.append("本段沒有引用任何參考素材（M0 寫法）：一致性只靠文字鎖")
-    if any(m["global"] != m["call"] for m in mapping):
-        warnings.append("圖號已按本次掛載順序改寫（見 mapping）；回報用戶時兩套編號都要給")
+    if mapping:
+        warnings.append("圖號已改寫成 Lenmu 記號（見 mapping）；回報用戶時全局圖號與 [Image k] 兩套都要給")
 
     size = SIZES.get((aspect, res))
     if not size:
@@ -112,7 +117,13 @@ def self_test():
     r = wire(p, wiring, "2.0", "9:16", 12)
     assert r["ok"], r["errors"]
     assert r["args"]["reference_media_ids"] == [a, b, c]
-    assert "（圖3）" in r["args"]["prompt"] and "圖5" not in r["args"]["prompt"]
+    assert r["args"]["prompt"].count("[Image 3]") == 2 and "圖5" not in r["args"]["prompt"]
+    assert "（參考[Image 1]）" in r["args"]["prompt"] and "@林越（[Image 2]）" in r["args"]["prompt"]
+    assert [m["call"] for m in r["mapping"]] == ["[Image 1]", "[Image 2]", "[Image 3]"]
+    r2 = wire("[圖5] 與 图2、[Image 1]、視頻1", dict(wiring, 視頻1=a), "2.5", "16:9", 20)
+    assert r2["args"]["prompt"] == "[Image 3] 與 [Image 2]、[Image 1]、[Video 1]", r2["args"]["prompt"]
+    assert r2["args"]["reference_media_ids"] == [a, b, c, a]
+    assert wire("圖1", {"图1": a}, "2.5", "16:9", 12)["ok"], "圖冊鍵應繁簡皆可"
     assert "構圖1/3" in r["args"]["prompt"], "構圖 不應被當作圖號"
     assert r["args"]["size"] == "720x1280" and r["args"]["model"] == "byteplus/seedance-2.0"
     r = wire("@林越（圖2）、@反派（圖9）", wiring, "2.5", "16:9", 28)
